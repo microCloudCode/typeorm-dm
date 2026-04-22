@@ -1,5 +1,5 @@
 {
-  "name": "@ylz/typeorm-dm",
+  "name": "@ylz-api/typeorm-dm",
   "version": "1.0.0",
   "description": "DM (达梦) database dialect for TypeORM, with MERGE INTO upsert support",
   "main": "index.js",
