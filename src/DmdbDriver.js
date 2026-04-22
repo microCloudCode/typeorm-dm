@@ -75,6 +75,8 @@ class DmdbDriver {
         ];
         /**
          * Returns type of upsert supported by driver if any
+         *
+         * @ylz/typeorm-dm 改动：原版为 []，改为 ["merge-into"] 以启用 MERGE INTO upsert
          */
         this.supportedUpsertTypes = ["merge-into"];
         /**

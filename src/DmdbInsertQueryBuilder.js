@@ -10,7 +10,9 @@ class DmdbInsertQueryBuilder extends InsertQueryBuilder_1.InsertQueryBuilder {
      * Creates INSERT express used to perform insert query.
      */
     createInsertExpression() {
-        // dameng patch: merge-into upsert 走 DM 专属路径
+        // @ylz/typeorm-dm 改动：当 onUpdate 存在且 upsertType 为 merge-into 时，
+        // 分流到 DM 专属的 createDmMergeExpression()，生成 MERGE INTO 语句
+        // 原版缺少此分支，导致 .orUpdate() 报错 "onUpdate is not supported"
         if (
             this.expressionMap.onUpdate &&
             this.expressionMap.onUpdate.upsertType !== "primary-key" &&
@@ -460,13 +462,17 @@ class DmdbInsertQueryBuilder extends InsertQueryBuilder_1.InsertQueryBuilder {
         );
     }
     /**
-     * DM-specific MERGE INTO implementation.
+     * @ylz/typeorm-dm 新增方法：达梦 MERGE INTO upsert 实现
      *
-     * DM's IDENTITY columns reject DEFAULT in MERGE INTO INSERT clause.
-     * Strategy:
-     *   - USING SELECT: include IDENTITY col only if user provides a value or it's a conflict col
-     *   - INSERT cols/values: exclude IDENTITY col unless user provides a value
-     *   - If user provides IDENTITY value for INSERT: wrap with SET IDENTITY_INSERT ON/OFF
+     * 原版 typeorm-dm 不支持 upsert，此方法为完整新增。
+     * 生成语法：MERGE INTO "table" USING (SELECT ... FROM DUAL) "s"
+     *           ON (...) WHEN MATCHED THEN UPDATE SET ...
+     *           WHEN NOT MATCHED THEN INSERT (...) VALUES (...)
+     *
+     * 达梦 IDENTITY 列特殊处理：
+     *   - USING SELECT：非 IDENTITY 列始终包含；IDENTITY 列仅在它是冲突列或用户提供了值时才包含
+     *   - INSERT 列/值：排除无用户值的 IDENTITY 列（让 DM 自动生成）
+     *   - 如果用户为 IDENTITY 列提供了值：整个语句用 SET IDENTITY_INSERT ON/OFF 包裹
      */
     createDmMergeExpression() {
         const tableName = this.getTableName(this.getMainTableName());
