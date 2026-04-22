@@ -1,0 +1,32 @@
+---
+description: 
+alwaysApply: true
+---
+
+# Git 提交信息：类型英文 + 说明中文（最高优先级）
+
+在 **Source Control 中由 AI 生成 commit message**、或在对话中建议提交说明时，必须遵守本节。**若与任何其他习惯冲突，以本节为准。**
+
+## 强制规则
+
+1. **冒号 `:` 之后只能写中文**：用简短中文说明「做了什么」。**禁止**用英文写整句说明（技术名词可保留英文单词，如 `uuid`、`MERGE`）。
+2. **仅允许出现的非中文内容**：行首的 `type`（如 `feat`/`fix`/`chore`）、可选的 `(scope)`、分隔符与空格。
+3. **错误示例（禁止输出）**：`chore: update version to 1.0.1 and add uuid as a peer dependency`
+4. **正确示例**：`chore(deps): 将版本升至 1.0.1，并把 uuid 改为 peerDependency`
+
+## 首行格式
+
+- `type(scope): 中文简述` 或 `type: 中文简述`
+- `type`：`feat` | `fix` | `docs` | `style` | `refactor` | `perf` | `test` | `build` | `ci` | `chore` | `revert`
+- `scope`：可选，小写英文短词；无则省略括号
+- 简述：中文，句末一般不加句号
+
+## 更多正确示例
+
+- `feat(dm): 为 insert 增加 MERGE INTO upsert 路径`
+- `fix: 在 merge 语句中处理自增主键列`
+- `docs: 补充安装与 npm alias 说明`
+
+## 多行正文
+
+- 空一行后用中文写原因或影响；破坏性变更可写 `BREAKING CHANGE: 中文说明`

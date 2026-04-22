@@ -1,6 +1,6 @@
 {
   "name": "@ylz-api/typeorm-dm",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "DM (达梦) database dialect for TypeORM, with MERGE INTO upsert support",
   "main": "index.js",
   "typings": "index.d.ts",
@@ -24,11 +24,11 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "dmdb": "^1.0.34946",
-    "uuid": "^9.0.0"
+    "dmdb": "^1.0.34946"
   },
   "peerDependencies": {
-    "typeorm": "^0.3.25"
+    "typeorm": "^0.3.25",
+    "uuid": "^9.0.0"
   },
   "engines": {
     "node": ">=16.13.0"
