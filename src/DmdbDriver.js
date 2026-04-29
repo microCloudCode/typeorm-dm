@@ -296,6 +296,9 @@ class DmdbDriver {
      * and an array of parameter names to be passed to a query.
      */
     escapeQueryWithParameters(sql, parameters, nativeParameters) {
+        // @ylz/typeorm-dm 改动：达梦 Oracle 模式下裸标识符会被自动转大写，
+        // 在替换参数之前先对未转义的 alias.column 形式加双引号
+        sql = DmdbDriver.autoEscapeRawIdentifiers(sql);
         const escapedParameters = Object.keys(nativeParameters).map((key) => {
             if (typeof nativeParameters[key] === "boolean")
                 return nativeParameters[key] ? 1 : 0;
@@ -989,6 +992,30 @@ class DmdbDriver {
             tableColumn.type.toLowerCase() === "longtext")
             return false;
         return tableColumn.type !== this.normalizeType(columnMetadata);
+    }
+    /**
+     * @ylz/typeorm-dm 新增静态方法：自动转义 SQL 中未加双引号的 alias.column / alias.* 标识符。
+     *
+     * 达梦在 Oracle 模式下，裸标识符会被自动折叠为大写，导致驼峰命名列查询报错。
+     * 此方法在 SQL 执行前，将形如 word.word 或 word.* 的裸引用转义为 "word"."word" / "word".*。
+     *
+     * 规则：
+     *   - 仅处理 letter/digit/underscore 组成的单词加点再加单词（或 *）
+     *   - 已有双引号包裹的标识符（如 "SCHEMA"."table"）不受影响，因为引号会截断字母序列
+     *   - :paramName 参数不含点，不受影响
+     *
+     * 示例：
+     *   doctor.id = :id            → "doctor"."id" = :id
+     *   department.name LIKE :kw   → "department"."name" LIKE :kw
+     *   doctor.*                   → "doctor".*
+     *   "SD_JKTJ"."s_doctor"       → 不变
+     */
+    static autoEscapeRawIdentifiers(sql) {
+        return sql.replace(
+            /([a-zA-Z_][a-zA-Z0-9_]*)\.(\*|[a-zA-Z_][a-zA-Z0-9_]*)/g,
+            (match, alias, column) =>
+                `"${alias}".${column === "*" ? "*" : `"${column}"`}`
+        );
     }
 }
 exports.DmdbDriver = DmdbDriver;
