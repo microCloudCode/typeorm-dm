@@ -1,12 +1,10 @@
 # @ylz-api/typeorm-dm
 
-> Fork 自 [typeorm-dm@1.0.43524](https://www.npmjs.com/package/typeorm-dm)，新增 **MERGE INTO upsert** 和**标识符自动转义**支持。
+> Fork 自 [typeorm-dm@1.0.43524](https://www.npmjs.com/package/typeorm-dm)，新增 **MERGE INTO upsert** 支持。
 
 达梦数据库驱动 [dmdb](https://www.npmjs.com/package/dmdb) 适配 [TypeORM](https://www.npmjs.com/package/typeorm) 框架的方言包。
 
 ## 与原版的区别
-
-### 1. MERGE INTO upsert 支持
 
 原版 `typeorm-dm` 缺少 TypeORM 0.3.25+ 的 `merge-into` upsert 路径，
 导致在达梦上调用 `.orUpdate()` 报错 `"onUpdate is not supported by the current database driver"`。
@@ -16,27 +14,6 @@
 - `DmdbDriver.js` — `supportedUpsertTypes` 改为 `["merge-into"]`
 - `DmdbInsertQueryBuilder.js` — `createInsertExpression()` 增加分流，当 `onUpdate` 存在且为 merge-into 类型时，走新的 `createDmMergeExpression()` 方法
 - 新增 `createDmMergeExpression()` — 生成达梦兼容的 `MERGE INTO` 语句，正确处理 IDENTITY 列的自动排除和 `SET IDENTITY_INSERT ON/OFF`
-
-### 2. 标识符自动转义
-
-达梦在 Oracle 兼容模式下，未加双引号的标识符会被自动折叠为大写，
-导致 QueryBuilder 中开发者手写的裸条件（如 `.where("doctor.departmentId = :id")`）中的
-`doctor.departmentId` 变成 `DOCTOR.DEPARTMENTID`，与驼峰命名的列不匹配，查询报错。
-
-本 fork 在 `escapeQueryWithParameters` 中新增 `autoEscapeRawIdentifiers` 静态方法，
-在 SQL 发送给数据库前，自动将 `alias.column` 形式转义为 `"alias"."column"`。
-
-规则：
-- 仅处理裸标识符（字母/数字/下划线组成的 `word.word` 或 `word.*`）
-- TypeORM 自动生成的已转义部分（如 `"schema"."table"`）不受影响
-- 参数占位符（`:paramName`）不含点，不受影响
-
-```
-doctor.departmentId = :id  →  "doctor"."departmentId" = :id
-department.name LIKE :kw   →  "department"."name" LIKE :kw
-doctor.*                   →  "doctor".*
-"SD_JKTJ"."s_doctor"       →  不变
-```
 
 ## 安装
 
@@ -104,25 +81,13 @@ await userRepository.upsert(
 )
 ```
 
-## 标识符转义示例
-
-```typescript
-// 无需任何额外配置，以下写法在达梦上会自动转义
-await dataSource
-    .createQueryBuilder(Doctor, "doctor")
-    .leftJoinAndSelect("doctor.department", "department")
-    .where("doctor.departmentId = :id", { id: 1 })
-    .andWhere("doctor.status = :status", { status: "active" })
-    .getMany()
-
-// 生成的 SQL（达梦收到的）：
-// SELECT ... WHERE "doctor"."departmentId" = ? AND "doctor"."status" = ?
-```
-
 ## Change Logs
 
+### v1.0.3
+- 撤回 v1.0.2 的标识符自动转义功能（`autoEscapeRawIdentifiers`）
+
 ### v1.0.2
-- 新增标识符自动转义功能（`autoEscapeRawIdentifiers`），解决达梦 Oracle 模式下大写折叠问题
+- 新增标识符自动转义功能（`autoEscapeRawIdentifiers`），解决达梦 Oracle 模式下大写折叠问题（已在 v1.0.3 撤回）
 
 ### v1.0.1
 - 将 `uuid` 调整为 `peerDependencies`
