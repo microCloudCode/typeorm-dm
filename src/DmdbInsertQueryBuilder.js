@@ -606,9 +606,10 @@ class DmdbInsertQueryBuilder extends InsertQueryBuilder_1.InsertQueryBuilder {
      *       命中则跳过（无 WHEN MATCHED 子句），未命中则插入。
      *
      * ON 条件列优先级：
-     *   1. metadata.uniques 中的第一个唯一约束
-     *   2. metadata.indices 中第一个 isUnique 索引
-     *   3. 回退到主键列
+     *   1. metadata.uniques 中所有唯一约束（全部收集，OR 连接）
+     *   2. metadata.indices 中所有 isUnique 索引（全部收集，OR 连接）
+     *   3. 以上均无时，回退到主键列
+     * 多个约束组之间 OR 连接，组内列 AND 连接
      *
      * IDENTITY 列处理同 createDmMergeExpression：
      *   - 无用户值时排除出 INSERT 列表，由 DM 自动生成
@@ -631,15 +632,19 @@ class DmdbInsertQueryBuilder extends InsertQueryBuilder_1.InsertQueryBuilder {
                 return v !== undefined && v !== null;
             });
 
-        // --- 确定 ON 条件列（唯一约束 > 唯一索引 > 主键） ---
-        let onConditionColNames = [];
-        if (metadata.uniques && metadata.uniques.length > 0) {
-            onConditionColNames = metadata.uniques[0].columns.map((c) => c.databaseName);
-        } else if (metadata.indices && metadata.indices.some((i) => i.isUnique)) {
-            const uniqueIndex = metadata.indices.find((i) => i.isUnique);
-            onConditionColNames = uniqueIndex.columns.map((c) => c.databaseName);
-        } else {
-            onConditionColNames = metadata.primaryColumns.map((c) => c.databaseName);
+        // --- 确定 ON 条件：收集所有唯一约束组，约束组之间 OR 连接，组内列 AND 连接 ---
+        // @Unique 装饰器声明的唯一约束（全部收集，不只取第一个）
+        let constraintGroups = (metadata.uniques || []).map(
+            (u) => u.columns.map((c) => c.databaseName)
+        );
+        // @Index({ unique: true }) 唯一索引（全部收集）
+        const uniqueIndexGroups = (metadata.indices || [])
+            .filter((i) => i.isUnique)
+            .map((i) => i.columns.map((c) => c.databaseName));
+        constraintGroups = [...constraintGroups, ...uniqueIndexGroups];
+        // 两者均无时，回退到主键列
+        if (constraintGroups.length === 0) {
+            constraintGroups = [metadata.primaryColumns.map((c) => c.databaseName)];
         }
 
         // USING 列：非 IDENTITY 列始终包含；IDENTITY 列仅在用户提供值时包含
@@ -688,9 +693,15 @@ class DmdbInsertQueryBuilder extends InsertQueryBuilder_1.InsertQueryBuilder {
         usingExpr += `) ${mergeSourceAlias}`;
 
         // --- ON (唯一列匹配条件) ---
-        const onCondition = onConditionColNames
-            .map((colName) => `${tableAlias}.${this.escape(colName)} = ${mergeSourceAlias}.${this.escape(colName)}`)
-            .join(" AND ");
+        // 单组：直接 AND 连接；多组：每组加括号后 OR 连接
+        const buildGroupCondition = (cols) =>
+            cols
+                .map((colName) => `${tableAlias}.${this.escape(colName)} = ${mergeSourceAlias}.${this.escape(colName)}`)
+                .join(" AND ");
+        const onCondition =
+            constraintGroups.length === 1
+                ? buildGroupCondition(constraintGroups[0])
+                : constraintGroups.map((g) => `(${buildGroupCondition(g)})`).join(" OR ");
 
         // --- WHEN NOT MATCHED THEN INSERT（无 WHEN MATCHED，命中则跳过）---
         const insertColNames = insertColumns.map((c) => this.escape(c.databaseName)).join(", ");
