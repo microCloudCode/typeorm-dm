@@ -20,6 +20,11 @@ class DmdbInsertQueryBuilder extends InsertQueryBuilder_1.InsertQueryBuilder {
         ) {
             return this.createDmMergeExpression();
         }
+        // @ylz/typeorm-dm 改动：达梦不支持 INSERT IGNORE，转换为
+        // MERGE INTO ... WHEN NOT MATCHED THEN INSERT 实现等效的忽略冲突插入
+        if (this.expressionMap.onIgnore) {
+            return this.createDmMergeExpressionForIgnore();
+        }
         const tableName = this.getTableName(this.getMainTableName());
         const valuesExpression = this.createValuesExpression(); // its important to get values before returning expression because oracle rely on native parameters and ordering of them is important
         const returningExpression = this.connection.driver.options.type === "oracle" &&
@@ -585,6 +590,115 @@ class DmdbInsertQueryBuilder extends InsertQueryBuilder_1.InsertQueryBuilder {
             .join(", ");
 
         query += ` WHEN NOT MATCHED THEN INSERT (${insertColNames}) VALUES (${insertColValues})`;
+
+        if (needsIdentityInsert) {
+            query = `SET IDENTITY_INSERT ${tableName} ON WITH REPLACE NULL; ${query}; SET IDENTITY_INSERT ${tableName} OFF`;
+        }
+
+        return query;
+    }
+    /**
+     * @ylz/typeorm-dm 新增方法：达梦 INSERT IGNORE 的 MERGE INTO 等效实现
+     *
+     * 背景：达梦不支持 INSERT IGNORE INTO，会报 [-6602] 违反唯一性约束。
+     * 策略：用 MERGE INTO ... WHEN NOT MATCHED THEN INSERT 代替，
+     *       ON 条件取唯一约束列（优先）或主键列（回退），
+     *       命中则跳过（无 WHEN MATCHED 子句），未命中则插入。
+     *
+     * ON 条件列优先级：
+     *   1. metadata.uniques 中的第一个唯一约束
+     *   2. metadata.indices 中第一个 isUnique 索引
+     *   3. 回退到主键列
+     *
+     * IDENTITY 列处理同 createDmMergeExpression：
+     *   - 无用户值时排除出 INSERT 列表，由 DM 自动生成
+     *   - 有用户值时用 SET IDENTITY_INSERT ON/OFF 包裹
+     */
+    createDmMergeExpressionForIgnore() {
+        const tableName = this.getTableName(this.getMainTableName());
+        const tableAlias = this.escape(this.alias);
+        const allColumns = this.getInsertedColumns();
+        const mergeSourceAlias = this.escape("s");
+        const valueSets = this.getValueSets();
+        const metadata = this.expressionMap.mainAlias.metadata;
+
+        const isIdentityCol = (col) =>
+            col.isPrimary && col.isGenerated && col.generationStrategy === "increment";
+
+        const identityHasUserValue = (col) =>
+            valueSets.some((vs) => {
+                const v = col.getEntityValue(vs);
+                return v !== undefined && v !== null;
+            });
+
+        // --- 确定 ON 条件列（唯一约束 > 唯一索引 > 主键） ---
+        let onConditionColNames = [];
+        if (metadata.uniques && metadata.uniques.length > 0) {
+            onConditionColNames = metadata.uniques[0].columns.map((c) => c.databaseName);
+        } else if (metadata.indices && metadata.indices.some((i) => i.isUnique)) {
+            const uniqueIndex = metadata.indices.find((i) => i.isUnique);
+            onConditionColNames = uniqueIndex.columns.map((c) => c.databaseName);
+        } else {
+            onConditionColNames = metadata.primaryColumns.map((c) => c.databaseName);
+        }
+
+        // USING 列：非 IDENTITY 列始终包含；IDENTITY 列仅在用户提供值时包含
+        const usingColumns = allColumns.filter((col) => {
+            if (!isIdentityCol(col)) return true;
+            return identityHasUserValue(col);
+        });
+
+        // INSERT 列：同 USING 列逻辑（排除无用户值的 IDENTITY 列）
+        const insertColumns = usingColumns;
+
+        const needsIdentityInsert = allColumns.some(
+            (col) => isIdentityCol(col) && identityHasUserValue(col)
+        );
+
+        // --- USING (SELECT ... FROM DUAL [UNION ALL ...]) s ---
+        let usingExpr = "USING (";
+        valueSets.forEach((valueSet, vsIdx) => {
+            usingExpr += "SELECT ";
+            usingColumns.forEach((column, cIdx) => {
+                let value = column.getEntityValue(valueSet);
+                if (value === undefined) {
+                    if (column.default !== undefined && column.default !== null) {
+                        usingExpr += this.connection.driver.normalizeDefault(column);
+                    } else {
+                        usingExpr += "NULL";
+                    }
+                } else if (value === null) {
+                    usingExpr += "NULL";
+                } else {
+                    if (!(typeof value === "function")) {
+                        value = this.connection.driver.preparePersistentValue(value, column);
+                    }
+                    if (typeof value === "function") {
+                        usingExpr += value();
+                    } else {
+                        usingExpr += this.createParameter(value);
+                    }
+                }
+                usingExpr += ` AS ${this.escape(column.databaseName)}`;
+                if (cIdx < usingColumns.length - 1) usingExpr += ", ";
+            });
+            usingExpr += " FROM DUAL";
+            if (vsIdx < valueSets.length - 1) usingExpr += " UNION ALL ";
+        });
+        usingExpr += `) ${mergeSourceAlias}`;
+
+        // --- ON (唯一列匹配条件) ---
+        const onCondition = onConditionColNames
+            .map((colName) => `${tableAlias}.${this.escape(colName)} = ${mergeSourceAlias}.${this.escape(colName)}`)
+            .join(" AND ");
+
+        // --- WHEN NOT MATCHED THEN INSERT（无 WHEN MATCHED，命中则跳过）---
+        const insertColNames = insertColumns.map((c) => this.escape(c.databaseName)).join(", ");
+        const insertColValues = insertColumns
+            .map((c) => `${mergeSourceAlias}.${this.escape(c.databaseName)}`)
+            .join(", ");
+
+        let query = `MERGE INTO ${tableName} ${tableAlias} ${usingExpr} ON (${onCondition}) WHEN NOT MATCHED THEN INSERT (${insertColNames}) VALUES (${insertColValues})`;
 
         if (needsIdentityInsert) {
             query = `SET IDENTITY_INSERT ${tableName} ON WITH REPLACE NULL; ${query}; SET IDENTITY_INSERT ${tableName} OFF`;
