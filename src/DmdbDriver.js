@@ -246,6 +246,9 @@ class DmdbDriver {
         this.dmdb.fetchAsString = [this.dmdb.CLOB];
         this.dmdb.fetchAsBuffer = [this.dmdb.BLOB];
         this.dmdb.outBindFormat = this.dmdb.OUT_FORMAT_ARRAY;
+        // @ylz/typeorm-dm 改动：开启扩展元数据，使 query() 结果的 metaData 包含 dbTypeName 等类型信息，
+        // 供后处理识别 DECIMAL/NUMERIC 列并转为 string（与 mysql2 默认行为对齐）
+        this.dmdb.extendedMetaData = true;
         if (this.options.replication) {
             this.slaves = await Promise.all(this.options.replication.slaves.map((slave) => {
                 return this.createPool(this.options, slave);
@@ -463,6 +466,20 @@ class DmdbDriver {
         }
         else if (columnMetadata.type === "set") {
             value = DateUtils_1.DateUtils.stringToSimpleArray(value);
+        }
+        else if (
+            columnMetadata.type === "decimal" ||
+            columnMetadata.type === "numeric" ||
+            columnMetadata.type === "dec"
+        ) {
+            // @ylz/typeorm-dm 改动：与 mysql2 默认行为对齐，DECIMAL/NUMERIC 返回 string，避免 JS 浮点精度丢失。
+            // 使用 toFixed(scale) 保留列定义的小数位（如 DECIMAL(10,2) 的 0 → "0.00"）。
+            // NUMBER 类型（整数场景）不受影响，走下方 Number 分支。
+            const scale = columnMetadata.scale;
+            value =
+                typeof scale === "number" && scale > 0
+                    ? Number(value).toFixed(scale)
+                    : String(value);
         }
         else if (columnMetadata.type === Number) {
             // convert to number if number

@@ -195,6 +195,28 @@ class DmdbQueryRunner extends BaseQueryRunner_1.BaseQueryRunner {
                     raw.rowsAffected ||
                     raw.implicitResults;
             if (raw?.hasOwnProperty("rows") && Array.isArray(raw.rows)) {
+                // @ylz/typeorm-dm 改动：将 DECIMAL/NUMERIC 列转为 string，与 mysql2 默认行为对齐。
+                // 使用 toFixed(scale) 保留列定义的小数位（如 DECIMAL(10,2) 的 0 → "0.00"），
+                // scale 信息由 extendedMetaData = true 提供。
+                if (raw.rows.length > 0 && raw.metaData) {
+                    const DECIMAL_TYPE_NAMES = new Set(["DECIMAL", "DEC", "NUMERIC"]);
+                    const decimalCols = raw.metaData
+                        .filter((col) => DECIMAL_TYPE_NAMES.has(col.dbTypeName?.toUpperCase()))
+                        .map((col) => ({ name: col.name, scale: col.scale }));
+                    if (decimalCols.length > 0) {
+                        raw.rows = raw.rows.map((row) => {
+                            const newRow = { ...row };
+                            for (const col of decimalCols) {
+                                if (newRow[col.name] == null) continue;
+                                newRow[col.name] =
+                                    typeof col.scale === "number" && col.scale > 0
+                                        ? Number(newRow[col.name]).toFixed(col.scale)
+                                        : String(newRow[col.name]);
+                            }
+                            return newRow;
+                        });
+                    }
+                }
                 result.records = raw.rows;
             }
             if (raw?.hasOwnProperty("outBinds") &&
