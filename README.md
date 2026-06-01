@@ -15,6 +15,7 @@
 - `DmdbDriver.js` — `supportedUpsertTypes` 改为 `["merge-into"]`
 - `createInsertExpression()` 增加分流，当 `onUpdate` 存在且为 merge-into 类型时，走 `createDmMergeExpression()`
 - 新增 `createDmMergeExpression()` — 生成达梦兼容的 `MERGE INTO` 语句，正确处理 IDENTITY（自增）列的自动排除和 `SET IDENTITY_INSERT ON/OFF`
+- 批量 upsert 时按 `orUpdate` 的 conflict 列自动去重（保留最后一条），避免 USING 源重复 ON 键触发 `[-6602]`
 
 ### 2. orIgnore 兼容（`.orIgnore()`）
 
@@ -23,6 +24,7 @@
 **改动：**
 - `createInsertExpression()` 检测到 `onIgnore` 时，分流到 `createDmMergeExpressionForIgnore()`
 - 新增 `createDmMergeExpressionForIgnore()` — 生成不含 `WHEN MATCHED` 子句的 `MERGE INTO`，命中冲突时跳过，未命中时正常插入
+- 批量 ignore 时按第一组 ON 冲突列自动去重（保留最后一条），与 upsert 行为一致
 
 **ON 条件推断优先级：**
 1. 所有 `@Unique` 约束（OR 连接，组内列 AND 连接）
@@ -170,6 +172,12 @@ console.log(typeof entities[0].price) // "string"
 ---
 
 ## Change Logs
+
+### v1.0.10
+- 修复批量 `orUpdate()` / `orIgnore()` 时 USING 源存在重复 ON 键导致 `[-6602]` 的问题
+  - 新增 `dedupeValueSetsForMerge()`：按 conflict 列去重，保留最后一条，对齐 MySQL 逐行 upsert 语义
+  - `createDmMergeExpression()`：按 `orUpdate` 的 conflict 列去重
+  - `createDmMergeExpressionForIgnore()`：按第一组 ON 冲突列去重
 
 ### v1.0.9
 - 修复 DECIMAL/NUMERIC 列转 string 时丢失小数位的问题（如 `0` → `"0.00"`）

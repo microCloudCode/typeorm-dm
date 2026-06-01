@@ -467,6 +467,24 @@ class DmdbInsertQueryBuilder extends InsertQueryBuilder_1.InsertQueryBuilder {
         );
     }
     /**
+     * MERGE USING 源不能有重复 ON 键，按 conflict 列去重，保留最后一条。
+     */
+    dedupeValueSetsForMerge(valueSets, allColumns, conflictColNames) {
+        if (valueSets.length <= 1 || !conflictColNames.length) return valueSets;
+
+        const map = new Map();
+        for (const row of valueSets) {
+            const key = conflictColNames
+                .map((name) => {
+                    const col = allColumns.find((c) => c.databaseName === name || c.propertyName === name);
+                    return col ? col.getEntityValue(row) : row[name];
+                })
+                .join(",");
+            map.set(key, row);
+        }
+        return [...map.values()];
+    }
+    /**
      * @ylz/typeorm-dm 新增方法：达梦 MERGE INTO upsert 实现
      *
      * 原版 typeorm-dm 不支持 upsert，此方法为完整新增。
@@ -484,7 +502,6 @@ class DmdbInsertQueryBuilder extends InsertQueryBuilder_1.InsertQueryBuilder {
         const tableAlias = this.escape(this.alias);
         const allColumns = this.getInsertedColumns();
         const mergeSourceAlias = this.escape("s");
-        const valueSets = this.getValueSets();
 
         const isIdentityCol = (col) =>
             col.isPrimary && col.isGenerated && col.generationStrategy === "increment";
@@ -496,6 +513,12 @@ class DmdbInsertQueryBuilder extends InsertQueryBuilder_1.InsertQueryBuilder {
                     ? [this.expressionMap.onUpdate.conflict]
                     : [])
             : [];
+
+        // MERGE USING 源不允许重复 ON 键，按 conflict 列去重（保留最后一条）
+        let valueSets = this.getValueSets();
+        if (conflictArr.length > 0) {
+            valueSets = this.dedupeValueSetsForMerge(valueSets, allColumns, conflictArr);
+        }
 
         const identityHasUserValue = (col) =>
             valueSets.some((vs) => {
@@ -620,17 +643,11 @@ class DmdbInsertQueryBuilder extends InsertQueryBuilder_1.InsertQueryBuilder {
         const tableAlias = this.escape(this.alias);
         const allColumns = this.getInsertedColumns();
         const mergeSourceAlias = this.escape("s");
-        const valueSets = this.getValueSets();
+        let valueSets = this.getValueSets();
         const metadata = this.expressionMap.mainAlias.metadata;
 
         const isIdentityCol = (col) =>
             col.isPrimary && col.isGenerated && col.generationStrategy === "increment";
-
-        const identityHasUserValue = (col) =>
-            valueSets.some((vs) => {
-                const v = col.getEntityValue(vs);
-                return v !== undefined && v !== null;
-            });
 
         // --- 确定 ON 条件：收集所有唯一约束组，约束组之间 OR 连接，组内列 AND 连接 ---
         // @Unique 装饰器声明的唯一约束（全部收集，不只取第一个）
@@ -646,6 +663,15 @@ class DmdbInsertQueryBuilder extends InsertQueryBuilder_1.InsertQueryBuilder {
         if (constraintGroups.length === 0) {
             constraintGroups = [metadata.primaryColumns.map((c) => c.databaseName)];
         }
+
+        // MERGE USING 源不允许重复 ON 键，按第一组冲突列去重（保留最后一条）
+        valueSets = this.dedupeValueSetsForMerge(valueSets, allColumns, constraintGroups[0]);
+
+        const identityHasUserValue = (col) =>
+            valueSets.some((vs) => {
+                const v = col.getEntityValue(vs);
+                return v !== undefined && v !== null;
+            });
 
         // USING 列：非 IDENTITY 列始终包含；IDENTITY 列仅在用户提供值时包含
         const usingColumns = allColumns.filter((col) => {
