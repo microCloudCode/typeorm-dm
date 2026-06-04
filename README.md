@@ -173,6 +173,13 @@ console.log(typeof entities[0].price) // "string"
 
 ## Change Logs
 
+### v1.0.12
+- 修复 `Repository.insert(多条)` 在达梦上行数 ≥ `BATCH_INSERT_ROWS`（默认 10）时报 `[-6605] 违反非空约束` 的问题
+  - `isOverridingAutoIncrementBehavior()`：恢复原始判断，仅当用户显式提供 id 值时才触发 `IDENTITY_INSERT`
+  - `getInsertedColumns()`：对 `innerType=dmdb` 增加专属判断，无用户 id 时将 IDENTITY 列从 INSERT 列表中剔除，由达梦自动生成自增值
+  - 修复逻辑与已有 `createDmMergeExpression()` 中的 IDENTITY 列处理保持一致
+  - 显式传 id 的 insert 场景（数据迁移等）不受影响，仍走 `IDENTITY_INSERT` 路径
+
 ### v1.0.10
 - 修复批量 `orUpdate()` / `orIgnore()` 时 USING 源存在重复 ON 键导致 `[-6602]` 的问题
   - 新增 `dedupeValueSetsForMerge()`：按 conflict 列去重，保留最后一条，对齐 MySQL 逐行 upsert 语义

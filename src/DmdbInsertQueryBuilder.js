@@ -454,17 +454,69 @@ class DmdbInsertQueryBuilder extends InsertQueryBuilder_1.InsertQueryBuilder {
      * @param column
      */
     isOverridingAutoIncrementBehavior(column) {
-        return (column.isPrimary &&
+        return (
+            column.isPrimary &&
             column.isGenerated &&
             column.generationStrategy === "increment" &&
-            // dameng modify
-            true
-        // this.getValueSets().some(
-        //     (valueSet) =>
-        //         column.getEntityValue(valueSet) !== undefined &&
-        //         column.getEntityValue(valueSet) !== null,
-        // )
+            // @ylz/typeorm-dm v1.0.12 修复：恢复原始检查
+            // 只有用户显式提供了 id 值时才需要 IDENTITY_INSERT
+            // 未传 id 时应走达梦 IDENTITY 自增路径，不需要包裹 IDENTITY_INSERT
+            this.getValueSets().some(
+                (valueSet) =>
+                    column.getEntityValue(valueSet) !== undefined &&
+                    column.getEntityValue(valueSet) !== null,
+            )
         );
+    }
+    /**
+     * @ylz/typeorm-dm v1.0.12 新增：override getInsertedColumns()
+     *
+     * 基类 oracle 分支会保留 IDENTITY 列（Oracle 需要显式写 sequence.NEXTVAL），
+     * 但达梦的 IDENTITY 列在无用户值时应省略，由数据库自动生成。
+     * 在原有 oracle/mssql/mysql 判断之前插入达梦专属逻辑，其余逻辑完全继承自基类。
+     */
+    getInsertedColumns() {
+        if (!this.expressionMap.mainAlias.hasMetadata)
+            return [];
+        return this.expressionMap.mainAlias.metadata.columns.filter((column) => {
+            // 用户指定了列列表，只保留指定列
+            if (this.expressionMap.insertColumns.length)
+                return (this.expressionMap.insertColumns.indexOf(column.propertyPath) !== -1);
+            // 跳过 isInsert=false 的列
+            if (!column.isInsert) {
+                return false;
+            }
+            // @ylz/typeorm-dm v1.0.12 修复：达梦（innerType=dmdb）的 IDENTITY 列处理
+            // type:"oracle" 分支原本会保留自增列（Oracle 需要显式写 sequence），
+            // 但达梦的 IDENTITY 列在无用户值时应省略，由数据库自动生成，
+            // 与 createDmMergeExpression() 里的 isIdentityCol + identityHasUserValue 逻辑保持一致。
+            if (
+                this.connection.driver.options.innerType === "dmdb" &&
+                column.isPrimary &&
+                column.isGenerated &&
+                column.generationStrategy === "increment"
+            ) {
+                const hasUserValue = this.getValueSets().some((vs) => {
+                    const v = column.getEntityValue(vs);
+                    return v !== undefined && v !== null;
+                });
+                // 有用户值：保留列（后续 IDENTITY_INSERT 会生效）
+                // 无用户值：剔除列，让 IDENTITY 自动生成
+                return hasUserValue;
+            }
+            // 继续走原有 oracle/mssql/mysql... 分支逻辑（与基类完全一致）
+            if (column.isGenerated &&
+                column.generationStrategy === "increment" &&
+                !(this.connection.driver.options.type === "spanner") &&
+                !(this.connection.driver.options.type === "oracle") &&
+                !DriverUtils_1.DriverUtils.isSQLiteFamily(this.connection.driver) &&
+                !DriverUtils_1.DriverUtils.isMySQLFamily(this.connection.driver) &&
+                !(this.connection.driver.options.type === "aurora-mysql") &&
+                !(this.connection.driver.options.type === "mssql" &&
+                    this.isOverridingAutoIncrementBehavior(column)))
+                return false;
+            return true;
+        });
     }
     /**
      * MERGE USING 源不能有重复 ON 键，按 conflict 列去重，保留最后一条。
